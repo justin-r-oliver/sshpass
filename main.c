@@ -47,6 +47,7 @@ enum program_return_codes {
     RETURN_RUNTIME_ERROR,
     RETURN_PARSE_ERRROR,
     RETURN_INCORRECT_PASSWORD,
+    RETURN_INCORRECT_VERIFICATION_CODE,
     RETURN_HOST_KEY_UNKNOWN,
     RETURN_HOST_KEY_CHANGED,
 };
@@ -71,6 +72,7 @@ struct {
     } pwsrc;
 
     const char *pwprompt;
+    const char *verificationcode;
     int verbose;
 } args;
 
@@ -84,6 +86,7 @@ static void show_help()
 	    "   With no parameters - password will be taken from stdin\n\n"
             "   -P prompt     Which string should sshpass search for to detect a password prompt\n"
             "   -v            Be verbose about what you're doing\n"
+        "   -c code       Use code for Verification code prompt\n"
 	    "   -h            Show help (this screen)\n"
 	    "   -V            Print version information\n"
 	    "At most one of -f, -d, -p or -e should be used\n");
@@ -104,7 +107,7 @@ static int parse_options( int argc, char *argv[] )
     fprintf(stderr, "Conflicting password source\n"); \
     error=RETURN_CONFLICTING_ARGUMENTS; }
 
-    while( (opt=getopt(argc, argv, "+f:d:p:P:heVv"))!=-1 && error==-1 ) {
+    while( (opt=getopt(argc, argv, "+f:d:p:P:c:heVv"))!=-1 && error==-1 ) {
 	switch( opt ) {
 	case 'f':
 	    // Password should come from a file
@@ -151,6 +154,9 @@ static int parse_options( int argc, char *argv[] )
 
                 error=RETURN_INVALID_ARGUMENTS;
             }
+	    break;
+	case 'c':
+	    args.verificationcode=optarg;
 	    break;
 	case '?':
 	case ':':
@@ -370,7 +376,8 @@ int runprogram( int argc, char *argv[] )
 	    wait_id=waitpid( childpid, &status, 0 );
 	}
 
-        printf("term %d terminate %d\n", term, terminate );
+        if ( args.verbose)
+            printf("term %d terminate %d\n", term, terminate );
     } while( wait_id==0 || (!WIFEXITED( status ) && !WIFSIGNALED( status )) );
 
     if( terminate>0 )
@@ -388,10 +395,12 @@ int handleoutput( int fd )
 {
     // We are looking for the string
     static int prevmatch=0; // If the "password" prompt is repeated, we have the wrong password.
-    static int state1, state2;
+    static int verificationcodesent=0; // If the "Verification Code" prompt is repeated, we have the wrong code.
+    static int state1, state2, state3;
     static int firsttime = 1;
     static const char *compare1=PASSWORD_PROMPT; // Asking for a password
     static const char compare2[]="The authenticity of host "; // Asks to authenticate host
+    static const char compare3[]="Verification code:"; // Asking for a verification code
     // static const char compare3[]="WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!"; // Warns about man in the middle attack
     // The remote identification changed error is sent to stderr, not the tty, so we do not handle it.
     // This is not a problem, as ssh exists immediately in such a case
@@ -413,6 +422,27 @@ int handleoutput( int fd )
         fprintf(stderr, "SSHPASS read: %s\n", buffer);
     }
 
+    // Look for verification code prompt
+    state3=match( compare3, buffer, numread, state3 );
+
+    // Are we at a verification code prompt?
+    if( compare3[state3]=='\0' ) {
+        if ( !verificationcodesent) {
+            if ( args.verbose)
+                printf("SSHPASS detected verification code prompt. Sending code %s\n", args.verificationcode);
+            write( fd, args.verificationcode, strlen( args.verificationcode ) );
+            write( fd, "\n", 1 );
+            state3=0;
+            verificationcodesent=1;
+        } else {
+            // Wrong verification code - terminate with proper error code
+            if( args.verbose )
+                fprintf(stderr, "SSHPASS detected verification code prompt, again. Wrong code. Terminating.\n");
+            ret=RETURN_INCORRECT_VERIFICATION_CODE;
+        }
+    }
+
+    // Look for password prompt
     state1=match( compare1, buffer, numread, state1 );
 
     // Are we at a password prompt?

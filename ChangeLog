@@ -1,3 +1,6 @@
+Version NOTRELEASED
+	* Add -c for specifying a string for be entered at a 'Verification code:' prompt
+
 Version 1.06
 	* Add -P for overriding the password prompt we search for
 	* Add -v for verbose logging of the prompt detection prompt.
